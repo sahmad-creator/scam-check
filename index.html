@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fake Job Message Checker</title>
+<meta name="description" content="Paste a job message from WhatsApp, Telegram or email and see which scam red flags it contains. Runs in your browser; nothing is uploaded.">
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#14171f;--mute:#5b6270;--line:#dfe3ea;--low:#1d7a4a;--med:#b36b00;--high:#c62828;--accent:#2749d8}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1218;--card:#181c25;--ink:#eef0f5;--mute:#9aa3b2;--line:#2a303c;--low:#4cc38a;--med:#f0b24a;--high:#ff6b6b;--accent:#8aa2ff}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:720px;margin:0 auto;padding:28px 16px 56px}
+h1{font-size:1.6rem;margin:0 0 6px;line-height:1.25}p.sub{color:var(--mute);margin:0 0 20px}
+textarea{width:100%;min-height:180px;padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);font:inherit;resize:vertical}
+textarea:focus,button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0 0}
+button{font:inherit;padding:10px 18px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
+button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+#out{margin-top:24px}.score{display:flex;align-items:baseline;gap:12px}
+.num{font-size:3rem;font-weight:700;line-height:1}.lvl{font-weight:600}
+.bar{height:10px;border-radius:6px;background:var(--line);overflow:hidden;margin:12px 0 18px}.bar i{display:block;height:100%;width:0;transition:width .5s}
+ul{padding-left:18px}li{margin:8px 0}li b{font-weight:600}
+.note{font-size:.9rem;color:var(--mute);border-top:1px solid var(--line);margin-top:28px;padding-top:14px}
+@media (prefers-reduced-motion:reduce){.bar i{transition:none}}
+</style></head><body><main>
+<h1>Fake job message checker</h1>
+<p class="sub">Paste a job offer from WhatsApp, Telegram or email. You get a risk score and the exact reasons. Everything runs in your browser; nothing is uploaded.</p>
+<label for="msg" class="sub" style="display:block;margin-bottom:6px">Job message</label>
+<textarea id="msg" placeholder="Paste the message here..."></textarea>
+<div class="row"><button class="primary" id="go">Check message</button><button id="ex1">Try a scam-style example</button><button id="ex2">Try a normal example</button><button id="clr">Clear</button></div>
+<section id="out" aria-live="polite"></section>
+<p class="note">This is a rule-based checker, not a verdict. A low score does not prove a job is real, and a high score is a reason to stop and verify, not proof of fraud. Never pay a fee, share an OTP, or send Aadhaar/PAN/bank details to get a job. Verify the company on its official website and report fraud at cybercrime.gov.in or call 1930.</p>
+</main>
+<script>
+// Shared rule set: each rule = [id, weight, regex, plain-language reason]
+const RULES = [
+  ["fee", 35, /(registration|security|refundable|processing|training|kit|joining|verification|id card|laptop)\s*(fee|fees|charge|charges|deposit|amount)|pay\s*(₹|rs\.?|inr)?\s*\d+|deposit\s*(₹|rs\.?)?\s*\d+|paisa\s*(bhejo|jama)|fees?\s*(bhejna|dena|pay)/i, "Asks you to pay money (fee/deposit/kit). Real employers do not charge candidates."],
+  ["sensitive", 25, /(aadhaar|aadhar|pan card|bank (account|details)|\botp\b|cvv|atm pin|passport copy|selfie with id|upi pin)/i, "Asks for Aadhaar/PAN/bank details or an OTP before any real hiring step."],
+  ["nointerview", 20, /(no interview|without interview|direct (selection|joining|offer)|selected without|instant (joining|offer)|interview nahi)/i, "Promises a job with no interview or screening."],
+  ["pay", 20, /(earn|income|salary|kamao|kamaye)[^.\n]{0,40}(₹|rs\.?|inr)?\s*\d{3,6}\s*(-|to|se)?\s*\d{0,6}\s*(per day|daily|a day|\/day|roz|per hour|per task)|(₹|rs\.?)\s*\d{3,6}\s*(per day|daily|\/day)|(lakh|lac)s?\s*(per month|monthly)\s*(from home|easy)/i, "Unrealistic or daily-cash pay for simple work."],
+  ["noexp", 10, /(no (experience|skills?|qualification)|any(one)? can (apply|join|earn)|12th pass|just (a )?(phone|mobile)|bina experience)/i, "Says anyone can do it with no skills, which is common in scam offers."],
+  ["chat", 15, /(whatsapp|telegram|signal)[^.\n]{0,40}(only|contact|message|msg|join|group|number|interview)|(interview|chat|contact|hr)[^.\n]{0,30}(on|via|through)\s*(whatsapp|telegram)|wa\.me|t\.me/i, "Moves the conversation to WhatsApp/Telegram instead of an official channel."],
+  ["freemail", 15, /\b[\w.+-]+@(gmail|yahoo|outlook|hotmail|rediffmail|protonmail)\.(com|in)\b/i, "HR contact uses a free email address, not a company domain."],
+  ["urgency", 10, /(urgent(ly)?|limited (seats|slots|vacancies)|join (today|now|immediately)|hurry|last date today|only \d+ (seats|slots)|aaj hi)/i, "Creates pressure to act right now."],
+  ["task", 10, /(like (and|&) subscribe|rate (products|hotels|apps)|typing work|form filling|copy[- ]paste|captcha|data entry|watch (videos|ads)|review tasks?|click(ing)? (links|ads))/i, "Describes a simple click/type/like task, a very common job-scam pattern."],
+  ["link", 10, /(bit\.ly|tinyurl|cutt\.ly|rb\.gy|shorturl|is\.gd|goo\.gl)/i, "Contains a shortened link that hides where it goes."],
+  ["offer", 10, /(congratulations[^.\n]{0,40}(selected|shortlisted)|you (are|have been) (selected|shortlisted)|offer letter (attached|enclosed|is ready))/i, "Says you are already selected before any real process."],
+];
+const GOOD = [
+  ["official", -10, /(careers?\.[a-z0-9-]+\.(com|in|org)|apply (on|at|via) (the )?(official|company) (website|careers? page))/i, "Points to an official careers page."],
+];
+function analyze(text) {
+  const t = (text || "").trim();
+  const hits = [];
+  let score = 0;
+  for (const [id, w, re, why] of [...RULES, ...GOOD]) {
+    if (re.test(t)) { hits.push({ id, w, why }); score += w; }
+  }
+  score = Math.max(0, Math.min(100, score));
+  const level = score >= 55 ? "high" : score >= 25 ? "medium" : "low";
+  return { score, level, hits };
+}
+
+const $=s=>document.querySelector(s);
+const EX1="Congratulations, you are selected! Data entry work from home, earn Rs 3000 daily. Pay registration fee Rs 500. Contact HR on WhatsApp only: hr.jobs2026@gmail.com. Join today, limited seats.";
+const EX2="Hello Shah, thank you for applying for the Data Analyst Intern role at Acme Pvt Ltd. Your interview is scheduled on Google Meet on 25 Oct at 11:00. Role details are at careers.acme.com.";
+function esc(s){return s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+function render(r){
+  const col={low:"var(--low)",medium:"var(--med)",high:"var(--high)"}[r.level];
+  const lab={low:"Low risk",medium:"Medium risk",high:"High risk"}[r.level];
+  const bad=r.hits.filter(h=>h.w>0), good=r.hits.filter(h=>h.w<0);
+  let h=`<div class="score"><span class="num" style="color:${col}">${r.score}</span><span class="lvl" style="color:${col}">${lab} (out of 100)</span></div><div class="bar"><i style="background:${col}"></i></div>`;
+  h+= bad.length? "<b>Red flags found</b><ul>"+bad.map(x=>`<li>${esc(x.why)}</li>`).join("")+"</ul>" : "<p>No known red flags matched. Still verify the company independently.</p>";
+  if(good.length) h+="<b>Good signs</b><ul>"+good.map(x=>`<li>${esc(x.why)}</li>`).join("")+"</ul>";
+  $("#out").innerHTML=h; requestAnimationFrame(()=>{$("#out .bar i").style.width=r.score+"%"});
+}
+$("#go").onclick=()=>{const t=$("#msg").value.trim(); if(!t){$("#out").innerHTML="<p>Paste a message first.</p>";return;} render(analyze(t));};
+$("#ex1").onclick=()=>{$("#msg").value=EX1;$("#go").click()};
+$("#ex2").onclick=()=>{$("#msg").value=EX2;$("#go").click()};
+$("#clr").onclick=()=>{$("#msg").value="";$("#out").innerHTML=""};
+</script></body></html>
